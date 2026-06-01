@@ -10,12 +10,12 @@ func TestChatSessionEnabledAndResettable(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GINGA_API_KEY", "")
 
-	a, err := NewCoderAgentWithConfig(CoderAgentConfig{
+	a, err := NewDeepAgentWithConfig(DeepAgentConfig{
 		ModelID:      "ollama:llama3.1:8b",
 		DisableShell: true,
 	})
 	if err != nil {
-		t.Fatalf("NewCoderAgentWithConfig: %v", err)
+		t.Fatalf("NewDeepAgentWithConfig: %v", err)
 	}
 
 	if a.sessionDB == nil {

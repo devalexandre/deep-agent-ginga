@@ -30,7 +30,7 @@ type multiSkillsLoader struct {
 	lastLoadDuration time.Duration
 }
 
-func newSkillsLoader(config CoderAgentConfig) (skill.SkillLoader, error) {
+func newSkillsLoader(config DeepAgentConfig) (skill.SkillLoader, error) {
 	var loaders []skill.SkillLoader
 
 	// Built-in embedded skills (validated). Empty when materialization failed.

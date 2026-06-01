@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-func TestNewCoderAgent(t *testing.T) {
+func TestNewDeepAgent(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GINGA_API_KEY", "")
 	apiKey := "test-key"
-	agent, err := NewCoderAgent(apiKey)
+	agent, err := NewDeepAgent(apiKey)
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -23,20 +23,20 @@ func TestNewCoderAgent(t *testing.T) {
 	}
 }
 
-func TestNewCoderAgent_NoApiKey(t *testing.T) {
+func TestNewDeepAgent_NoApiKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GINGA_API_KEY", "")
-	_, err := NewCoderAgent("")
+	_, err := NewDeepAgent("")
 	if err == nil {
 		t.Fatal("Should fail when API key is missing")
 	}
 }
 
-func TestNewCoderAgentWithOllamaDoesNotRequireAPIKey(t *testing.T) {
+func TestNewDeepAgentWithOllamaDoesNotRequireAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GINGA_API_KEY", "")
 
-	agent, err := NewCoderAgentWithConfig(CoderAgentConfig{
+	agent, err := NewDeepAgentWithConfig(DeepAgentConfig{
 		ModelID:      "ollama:llama3.1:8b",
 		DisableShell: true,
 	})

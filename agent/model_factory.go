@@ -45,7 +45,7 @@ var supportedModelProviders = map[string]modelProvider{
 	"vllm":              vllm.NewVLLMProvider,
 }
 
-func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error) {
+func newModel(config DeepAgentConfig) (models.AgnoModelInterface, string, error) {
 	provider, modelID := parseModelSpec(config.ModelID)
 	constructor, ok := supportedModelProviders[provider]
 	if !ok {

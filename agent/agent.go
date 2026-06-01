@@ -56,8 +56,8 @@ type Prompts struct {
 	Reporter    InstructionBuilder
 }
 
-// CoderAgentConfig configures the deep agent runtime.
-type CoderAgentConfig struct {
+// DeepAgentConfig configures the deep agent runtime.
+type DeepAgentConfig struct {
 	APIKey           string
 	ModelID          string
 	ModelBaseURL     string
@@ -69,6 +69,18 @@ type CoderAgentConfig struct {
 	DisableShell     bool
 	ToolCallLimit    int
 	CompressResults  bool
+
+	// Brain enables the persistent, project-scoped knowledge base. When true the
+	// agent gains the Brain tool, the deep workflow recalls relevant knowledge as
+	// its first step and updates the brain as its last step, and the brain index
+	// is surfaced to every agent.
+	Brain bool
+	// BrainDir overrides the brain root directory. Empty defaults to
+	// ~/.agno/brain.
+	BrainDir string
+	// BrainProject overrides the project name used to scope brain knowledge.
+	// Empty defaults to the workspace directory name.
+	BrainProject string
 
 	// Name is the display name of the interactive chat agent. Empty defaults to
 	// "Deep Agent".
@@ -97,17 +109,19 @@ type AgentActivity struct {
 	Error    string                 `json:"error,omitempty"`
 }
 
-type CoderAgent struct {
+type DeepAgent struct {
 	agent       *agnoagent.Agent
 	explorer    *agnoagent.Agent
 	planner     *agnoagent.Agent
 	implementer *agnoagent.Agent
 	verifier    *agnoagent.Agent
 	reporter    *agnoagent.Agent
+	curator     *agnoagent.Agent
 	workspace   string
 	modelID     string
 	knowledge   string
-	config      CoderAgentConfig
+	config      DeepAgentConfig
+	brainStore  *BrainStore
 
 	// Chat session: agno manages recent conversation history for the chat
 	// agent. These fields retain the inputs needed to rebuild just the chat
@@ -133,12 +147,12 @@ type CoderAgent struct {
 	activity   func(AgentActivity)
 }
 
-// NewCoderAgent keeps the original constructor for compatibility.
-func NewCoderAgent(apiKey string) (*CoderAgent, error) {
-	return NewCoderAgentWithConfig(CoderAgentConfig{APIKey: apiKey})
+// NewDeepAgent keeps the original constructor for compatibility.
+func NewDeepAgent(apiKey string) (*DeepAgent, error) {
+	return NewDeepAgentWithConfig(DeepAgentConfig{APIKey: apiKey})
 }
 
-func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
+func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 	startupStartedAt := time.Now()
 
 	if config.ModelID == "" {
@@ -187,12 +201,33 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 	}
 	configuredSkills := uniqueSkills(config.AdditionalSkills)
 
+	// Brain: persistent, project-scoped knowledge shared across agents and runs.
+	// The tool is added to the shared toolset (so every agent can recall/remember)
+	// and the lightweight index is appended to the knowledge surfaced to agents,
+	// keeping full content out of context until recalled on demand.
+	var brainStore *BrainStore
+	if config.Brain {
+		project := config.BrainProject
+		if strings.TrimSpace(project) == "" {
+			project = filepath.Base(workspace)
+		}
+		store, brainErr := NewBrainStore(config.BrainDir, project)
+		if brainErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: brain disabled: %v\n", brainErr)
+		} else {
+			brainStore = store
+			toolset = append(toolset, NewBrainTool(store))
+			configuredSkills = uniqueSkills(append(configuredSkills, "brain"))
+			knowledge = appendBrainKnowledge(knowledge, store)
+		}
+	}
+
 	chatName := strings.TrimSpace(config.Name)
 	if chatName == "" {
 		chatName = "Deep Agent"
 	}
 
-	coder := &CoderAgent{
+	deep := &DeepAgent{
 		workspace:          workspace,
 		modelID:            config.ModelID,
 		knowledge:          knowledge,
@@ -206,6 +241,7 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 		chatInstructions:   pickBuilder(config.Prompts.Chat, baseInstructions),
 		numHistoryRuns:     4,
 		chatSessionID:      newSessionID(),
+		brainStore:         brainStore,
 	}
 
 	// Shared SQLite store for agno chat session history. Non-fatal on failure:
@@ -213,47 +249,55 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 	if db, dbErr := defaultSessionDB(); dbErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: chat history disabled: %v\n", dbErr)
 	} else {
-		coder.sessionDB = db
+		deep.sessionDB = db
 	}
 
-	chatAgent, err := coder.buildChatAgent()
+	chatAgent, err := deep.buildChatAgent()
 	if err != nil {
 		return nil, err
 	}
 
-	explorer, err := coder.newRoleAgent(model, toolset, skillsLoader, "Codebase Explorer", "Maps repositories and finds relevant code", pickBuilder(config.Prompts.Explorer, explorerInstructions)(workspace, knowledge), skillsWith(explorerSkills, configuredSkills...), config.ToolCallLimit)
+	explorer, err := deep.newRoleAgent(model, toolset, skillsLoader, "Codebase Explorer", "Maps repositories and finds relevant code", pickBuilder(config.Prompts.Explorer, explorerInstructions)(workspace, knowledge), skillsWith(explorerSkills, configuredSkills...), config.ToolCallLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	planner, err := coder.newRoleAgent(model, toolset, skillsLoader, "Implementation Planner", "Creates focused implementation plans", pickBuilder(config.Prompts.Planner, plannerInstructions)(workspace, knowledge), skillsWith(plannerSkills, configuredSkills...), config.ToolCallLimit)
+	planner, err := deep.newRoleAgent(model, toolset, skillsLoader, "Implementation Planner", "Creates focused implementation plans", pickBuilder(config.Prompts.Planner, plannerInstructions)(workspace, knowledge), skillsWith(plannerSkills, configuredSkills...), config.ToolCallLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	implementer, err := coder.newRoleAgent(model, toolset, skillsLoader, "Code Implementer", "Edits code carefully and incrementally", pickBuilder(config.Prompts.Implementer, implementerInstructions)(workspace, knowledge), skillsWith(implementerSkills, configuredSkills...), config.ToolCallLimit)
+	implementer, err := deep.newRoleAgent(model, toolset, skillsLoader, "Code Implementer", "Edits code carefully and incrementally", pickBuilder(config.Prompts.Implementer, implementerInstructions)(workspace, knowledge), skillsWith(implementerSkills, configuredSkills...), config.ToolCallLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	verifier, err := coder.newRoleAgent(model, toolset, skillsLoader, "Code Verifier", "Runs checks and analyzes risk", pickBuilder(config.Prompts.Verifier, verifierInstructions)(workspace, knowledge), skillsWith(verifierSkills, configuredSkills...), config.ToolCallLimit)
+	verifier, err := deep.newRoleAgent(model, toolset, skillsLoader, "Code Verifier", "Runs checks and analyzes risk", pickBuilder(config.Prompts.Verifier, verifierInstructions)(workspace, knowledge), skillsWith(verifierSkills, configuredSkills...), config.ToolCallLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	reporter, err := coder.newRoleAgent(model, toolset, skillsLoader, "Change Reporter", "Summarizes completed coding work", pickBuilder(config.Prompts.Reporter, reporterInstructions)(workspace, knowledge), skillsWith(reporterSkills, configuredSkills...), config.ToolCallLimit)
+	reporter, err := deep.newRoleAgent(model, toolset, skillsLoader, "Change Reporter", "Summarizes completed coding work", pickBuilder(config.Prompts.Reporter, reporterInstructions)(workspace, knowledge), skillsWith(reporterSkills, configuredSkills...), config.ToolCallLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	coder.agent = chatAgent
-	coder.explorer = explorer
-	coder.planner = planner
-	coder.implementer = implementer
-	coder.verifier = verifier
-	coder.reporter = reporter
+	if brainStore != nil {
+		curator, curErr := deep.newRoleAgent(model, toolset, skillsLoader, "Brain Curator", "Persists durable, reusable knowledge to the project brain", brainCuratorInstructions(workspace, knowledge), skillsWith(reporterSkills, configuredSkills...), config.ToolCallLimit)
+		if curErr != nil {
+			return nil, curErr
+		}
+		deep.curator = curator
+	}
 
-	coder.status = RuntimeStatus{
+	deep.agent = chatAgent
+	deep.explorer = explorer
+	deep.planner = planner
+	deep.implementer = implementer
+	deep.verifier = verifier
+	deep.reporter = reporter
+
+	deep.status = RuntimeStatus{
 		Workspace:               workspace,
 		ModelID:                 config.ModelID,
 		StartupDuration:         time.Since(startupStartedAt),
@@ -268,24 +312,24 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 		LocalSignalsCacheMisses: knowledgeDetails.LocalSignals.CacheMisses,
 	}
 
-	if coder.skillsStatsTracker != nil {
-		stats := coder.skillsStatsTracker.CacheStats()
-		coder.status.SkillsLoadCalls = stats.LoadCalls
-		coder.status.SkillsCacheHits = stats.CacheHits
-		coder.status.SkillsLoaded = stats.LoadedSkills
-		coder.status.SkillsLastLoadDuration = stats.LastLoadDuration
+	if deep.skillsStatsTracker != nil {
+		stats := deep.skillsStatsTracker.CacheStats()
+		deep.status.SkillsLoadCalls = stats.LoadCalls
+		deep.status.SkillsCacheHits = stats.CacheHits
+		deep.status.SkillsLoaded = stats.LoadedSkills
+		deep.status.SkillsLastLoadDuration = stats.LastLoadDuration
 	}
 
-	return coder, nil
+	return deep, nil
 }
 
-func (c *CoderAgent) newRoleAgent(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int) (*agnoagent.Agent, error) {
+func (c *DeepAgent) newRoleAgent(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int) (*agnoagent.Agent, error) {
 	// Deep role agents thread state through the workflow, not agno session
 	// history, so they are built without a DB.
 	return c.newRoleAgentWithSession(model, tools, skillsLoader, name, description, instructions, skillsToUse, toolCallLimit, nil, "", false, 0)
 }
 
-func (c *CoderAgent) newRoleAgentWithSession(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int, db storage.DB, sessionID string, addHistory bool, numHistoryRuns int) (*agnoagent.Agent, error) {
+func (c *DeepAgent) newRoleAgentWithSession(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int, db storage.DB, sessionID string, addHistory bool, numHistoryRuns int) (*agnoagent.Agent, error) {
 	a, err := agnoagent.NewAgent(agnoagent.AgentConfig{
 		Model:                model,
 		Name:                 name,
@@ -326,7 +370,7 @@ func (c *CoderAgent) newRoleAgentWithSession(model models.AgnoModelInterface, to
 // available it enables agno's native conversation history (real user/assistant
 // messages) bounded by numHistoryRuns; otherwise it falls back to a stateless
 // chat agent.
-func (c *CoderAgent) buildChatAgent() (*agnoagent.Agent, error) {
+func (c *DeepAgent) buildChatAgent() (*agnoagent.Agent, error) {
 	return c.newRoleAgentWithSession(
 		c.model, c.toolset, c.skillsLoader,
 		c.chatName, "Interactive coding assistant",
@@ -339,7 +383,7 @@ func (c *CoderAgent) buildChatAgent() (*agnoagent.Agent, error) {
 // clear an agent's in-memory message history, the chat agent is rebuilt with a
 // new session id (whose stored history is empty), effectively forgetting the
 // prior conversation. On failure the existing agent is kept.
-func (c *CoderAgent) ResetChatSession(newSessionID string) error {
+func (c *DeepAgent) ResetChatSession(newSessionID string) error {
 	previous := c.chatSessionID
 	c.chatSessionID = newSessionID
 	rebuilt, err := c.buildChatAgent()
@@ -352,7 +396,7 @@ func (c *CoderAgent) ResetChatSession(newSessionID string) error {
 }
 
 // ChatSessionID returns the current chat session identifier.
-func (c *CoderAgent) ChatSessionID() string {
+func (c *DeepAgent) ChatSessionID() string {
 	return c.chatSessionID
 }
 
@@ -484,11 +528,11 @@ func compactValue(value interface{}, limit int) string {
 	return text[:limit] + "..."
 }
 
-func (c *CoderAgent) Chat(ctx context.Context, message string) (string, error) {
+func (c *DeepAgent) Chat(ctx context.Context, message string) (string, error) {
 	return c.ChatWithActivity(ctx, message, nil)
 }
 
-func (c *CoderAgent) ChatWithActivity(ctx context.Context, message string, activity func(AgentActivity)) (string, error) {
+func (c *DeepAgent) ChatWithActivity(ctx context.Context, message string, activity func(AgentActivity)) (string, error) {
 	startedAt := time.Now()
 	c.setActivity(activity)
 	defer c.setActivity(nil)
@@ -513,25 +557,25 @@ func (c *CoderAgent) ChatWithActivity(ctx context.Context, message string, activ
 	return resp.TextContent, nil
 }
 
-func (c *CoderAgent) Workspace() string {
+func (c *DeepAgent) Workspace() string {
 	return c.workspace
 }
 
-func (c *CoderAgent) ModelID() string {
+func (c *DeepAgent) ModelID() string {
 	return c.modelID
 }
 
 // DeepWork runs a multi-phase coding workflow for larger tasks.
-func (c *CoderAgent) DeepWork(ctx context.Context, task string) (string, error) {
+func (c *DeepAgent) DeepWork(ctx context.Context, task string) (string, error) {
 	return c.DeepWorkWithProgress(ctx, task, nil)
 }
 
 // DeepWorkWithProgress runs the deep workflow and emits step names as they start.
-func (c *CoderAgent) DeepWorkWithProgress(ctx context.Context, task string, progress func(step string)) (string, error) {
+func (c *DeepAgent) DeepWorkWithProgress(ctx context.Context, task string, progress func(step string)) (string, error) {
 	return c.DeepWorkWithActivity(ctx, task, progress, nil)
 }
 
-func (c *CoderAgent) DeepWorkWithActivity(ctx context.Context, task string, progress func(step string), activity func(AgentActivity)) (string, error) {
+func (c *DeepAgent) DeepWorkWithActivity(ctx context.Context, task string, progress func(step string), activity func(AgentActivity)) (string, error) {
 	startedAt := time.Now()
 	task = strings.TrimSpace(task)
 	if task == "" {
@@ -577,13 +621,13 @@ func (c *CoderAgent) DeepWorkWithActivity(ctx context.Context, task string, prog
 	return fmt.Sprintf("%v", resp.Content), nil
 }
 
-func (c *CoderAgent) setActivity(activity func(AgentActivity)) {
+func (c *DeepAgent) setActivity(activity func(AgentActivity)) {
 	c.activityMu.Lock()
 	defer c.activityMu.Unlock()
 	c.activity = activity
 }
 
-func (c *CoderAgent) emitActivity(activity AgentActivity) {
+func (c *DeepAgent) emitActivity(activity AgentActivity) {
 	c.activityMu.RLock()
 	defer c.activityMu.RUnlock()
 	if c.activity != nil {
@@ -591,7 +635,7 @@ func (c *CoderAgent) emitActivity(activity AgentActivity) {
 	}
 }
 
-func (c *CoderAgent) finalizeDeepStatus(duration time.Duration) {
+func (c *DeepAgent) finalizeDeepStatus(duration time.Duration) {
 	c.currentDeepRunMu.Lock()
 	phases := append([]PhaseDuration(nil), c.currentDeepPhases...)
 	c.currentDeepRunMu.Unlock()
@@ -610,19 +654,54 @@ func (c *CoderAgent) finalizeDeepStatus(duration time.Duration) {
 	})
 }
 
-func (c *CoderAgent) buildDeepWorkflow() *v2.Workflow {
-	return flow.New("Deep Flow").
-		Description("A staged coding workflow for large engineering tasks").
+func (c *DeepAgent) buildDeepWorkflow() *v2.Workflow {
+	builder := flow.New("Deep Flow").
+		Description("A staged coding workflow for large engineering tasks")
+	// When the brain is enabled, recall relevant prior knowledge before anything
+	// else so every phase starts informed by past runs.
+	if c.brainStore != nil {
+		builder = builder.Step("brain-recall", c.brainRecallStep())
+	}
+	builder = builder.
 		Step("intake", c.intakeStep()).
 		Step("explore", c.agentStep(c.explorer, "explore")).
 		Step("plan", c.agentStep(c.planner, "plan")).
 		Step("implement", c.agentStep(c.implementer, "implement")).
 		Step("verify", c.agentStep(c.verifier, "verify")).
-		Step("final-report", c.agentStep(c.reporter, "final-report")).
-		Build()
+		Step("final-report", c.agentStep(c.reporter, "final-report"))
+	// And update the brain last, persisting only durable, reusable learnings.
+	if c.brainStore != nil && c.curator != nil {
+		builder = builder.Step("brain-update", c.agentStep(c.curator, "brain-update"))
+	}
+	return builder.Build()
 }
 
-func (c *CoderAgent) intakeStep() v2.ExecutorFunc {
+// brainRecallStep is a deterministic (no-LLM) step that searches the project
+// brain for knowledge relevant to the task and threads it forward as a state
+// packet. Agents can recall more specifically via the Brain tool afterwards.
+func (c *DeepAgent) brainRecallStep() v2.ExecutorFunc {
+	return func(input *v2.StepInput) (*v2.StepOutput, error) {
+		startedAt := time.Now()
+		task := input.GetMessageAsString()
+		matches, err := c.brainStore.Recall(task, "")
+		var content string
+		if err != nil || len(matches) == 0 {
+			content = "PROJECT BRAIN\nNo prior knowledge matched this task. Use Brain_ListTopics / Brain_Recall to check, and record durable learnings at the end of the run."
+		} else {
+			var sb strings.Builder
+			sb.WriteString("PROJECT BRAIN — knowledge recalled for this task\n")
+			sb.WriteString("(Reuse this; verify against the live repo before relying on it.)\n")
+			for _, m := range matches {
+				sb.WriteString(fmt.Sprintf("\n## %s › %s\n%s\n", m.Topic, m.Subtopic, m.Content))
+			}
+			content = strings.TrimSpace(sb.String())
+		}
+		c.recordDeepPhaseDuration("brain-recall", time.Since(startedAt))
+		return &v2.StepOutput{StepName: "brain-recall", Content: content}, nil
+	}
+}
+
+func (c *DeepAgent) intakeStep() v2.ExecutorFunc {
 	return func(input *v2.StepInput) (*v2.StepOutput, error) {
 		startedAt := time.Now()
 		task := input.GetMessageAsString()
@@ -676,7 +755,7 @@ STATE PACKET FIELDS
 	}
 }
 
-func (c *CoderAgent) agentStep(a *agnoagent.Agent, phase string) v2.ExecutorFunc {
+func (c *DeepAgent) agentStep(a *agnoagent.Agent, phase string) v2.ExecutorFunc {
 	return func(input *v2.StepInput) (*v2.StepOutput, error) {
 		startedAt := time.Now()
 		prompt := c.phasePrompt(phase, input)
@@ -692,7 +771,7 @@ func (c *CoderAgent) agentStep(a *agnoagent.Agent, phase string) v2.ExecutorFunc
 	}
 }
 
-func (c *CoderAgent) recordDeepPhaseDuration(name string, duration time.Duration) {
+func (c *DeepAgent) recordDeepPhaseDuration(name string, duration time.Duration) {
 	c.currentDeepRunMu.Lock()
 	defer c.currentDeepRunMu.Unlock()
 
@@ -705,7 +784,7 @@ func (c *CoderAgent) recordDeepPhaseDuration(name string, duration time.Duration
 	c.currentDeepPhases = append(c.currentDeepPhases, PhaseDuration{Name: name, Duration: duration})
 }
 
-func (c *CoderAgent) phasePrompt(phase string, input *v2.StepInput) string {
+func (c *DeepAgent) phasePrompt(phase string, input *v2.StepInput) string {
 	task := input.GetMessageAsString()
 	context := c.compactPhaseContext(input.GetAllPreviousContent())
 
@@ -759,6 +838,9 @@ Run the most relevant checks for the changed behavior, inspect results, and iden
 	case "final-report":
 		return strings.TrimSpace(`
 Write the final user-facing answer in the user's language. Lead with the substance the user asked for, not with a description that work happened. Adapt the structure to the task type and do not force sections that do not apply.`)
+	case "brain-update":
+		return strings.TrimSpace(`
+Review the whole run and persist only durable, reusable, project-level knowledge to the brain with Brain_Remember: architecture facts, stable conventions, build/test/run commands that worked, and non-obvious gotchas discovered. Skip transient task details, one-off file paths, secrets, and anything already stored (check Brain_ListTopics first). If nothing is worth keeping, store nothing. This phase does not change source code or the user-facing answer.`)
 	default:
 		return "Complete this phase according to the deep mode contract."
 	}
@@ -810,6 +892,9 @@ Answer in the user's language and lead with the substance. Choose the shape that
 - Written deliverable (doc, plan, analysis, review): the key points/recommendations of what you produced first, then the exact saved path. Skip verification unless asked.
 - Question or explanation: answer directly with no section scaffolding.
 Never reply with only "a file was created". Do not invent results. Do not force sections that do not apply.`)
+	case "brain-update":
+		return strings.TrimSpace(`
+Return a short list of what you saved as "Topic › Subtopic — one-line reason", or the single line "Nothing durable to save." Do not restate the user-facing answer; the report phase already produced it.`)
 	default:
 		return "Return a compact state packet with facts, decisions, files, commands, and risks."
 	}
