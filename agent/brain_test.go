@@ -23,10 +23,10 @@ func newTestBrain(t *testing.T) *BrainStore {
 func TestBrainRememberAndRecall(t *testing.T) {
 	store := newTestBrain(t)
 
-	if err := store.Remember("Build & Test", "Commands", "Run `go test ./...` to test.", false); err != nil {
+	if err := store.Remember("Build & Test", "Commands", "Run `go test ./...` to test.", false, "", nil); err != nil {
 		t.Fatalf("Remember: %v", err)
 	}
-	if err := store.Remember("Architecture", "Layout", "Domain rules live under internal/domain.", false); err != nil {
+	if err := store.Remember("Architecture", "Layout", "Domain rules live under internal/domain.", false, "", nil); err != nil {
 		t.Fatalf("Remember: %v", err)
 	}
 
@@ -51,10 +51,10 @@ func TestBrainRememberAndRecall(t *testing.T) {
 
 func TestBrainAppendAndReplace(t *testing.T) {
 	store := newTestBrain(t)
-	if err := store.Remember("Gotchas", "CGO", "first note", false); err != nil {
+	if err := store.Remember("Gotchas", "CGO", "first note", false, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Remember("Gotchas", "CGO", "second note", false); err != nil {
+	if err := store.Remember("Gotchas", "CGO", "second note", false, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	matches, _ := store.Recall("", "Gotchas")
@@ -62,7 +62,7 @@ func TestBrainAppendAndReplace(t *testing.T) {
 		t.Fatalf("append failed: %+v", matches)
 	}
 
-	if err := store.Remember("Gotchas", "CGO", "only this", true); err != nil {
+	if err := store.Remember("Gotchas", "CGO", "only this", true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	matches, _ = store.Recall("", "Gotchas")
@@ -73,8 +73,8 @@ func TestBrainAppendAndReplace(t *testing.T) {
 
 func TestBrainForget(t *testing.T) {
 	store := newTestBrain(t)
-	_ = store.Remember("Topic", "A", "a", false)
-	_ = store.Remember("Topic", "B", "b", false)
+	_ = store.Remember("Topic", "A", "a", false, "", nil)
+	_ = store.Remember("Topic", "B", "b", false, "", nil)
 
 	if err := store.Forget("Topic", "A"); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestBrainForget(t *testing.T) {
 
 func TestBrainIndexOnlyTitles(t *testing.T) {
 	store := newTestBrain(t)
-	_ = store.Remember("Architecture", "Layout", "secret-body-should-not-appear", false)
+	_ = store.Remember("Architecture", "Layout", "secret-body-should-not-appear", false, "", nil)
 
 	index, err := store.Index()
 	if err != nil {
@@ -124,7 +124,7 @@ func TestBrainPersistsAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Remember("Conventions", "Errors", "wrap with %w", false); err != nil {
+	if err := first.Remember("Conventions", "Errors", "wrap with %w", false, "", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,6 +221,163 @@ func TestBrainDisabledByDefault(t *testing.T) {
 		if tool.GetName() == "Brain" {
 			t.Fatal("Brain tool present without Brain enabled")
 		}
+	}
+}
+
+func TestBrainFrontmatterRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewBrainStore(dir, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := map[string]any{
+		"method": "func envBool(name string, def bool) bool",
+		"tags":   []any{"env", "config"},
+		"file":   "agent/config.go",
+	}
+	if err := store.Remember("Config", "Env bool parser",
+		"Returns the default when the var is unset.", false,
+		"Reads a boolean flag from the environment with a default", meta); err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+
+	// The on-disk file must carry a YAML frontmatter block.
+	raw, err := os.ReadFile(filepath.Join(store.Dir(), "config.md"))
+	if err != nil {
+		t.Fatalf("read topic file: %v", err)
+	}
+	for _, want := range []string{"---", "description: Reads a boolean flag", "metadata:", "agent/config.go"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("topic file missing %q:\n%s", want, raw)
+		}
+	}
+
+	// A fresh store parses the frontmatter back into structured fields.
+	reloaded, err := NewBrainStore(dir, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := reloaded.Recall("", "Config")
+	if len(matches) != 1 {
+		t.Fatalf("recall = %+v, want one match", matches)
+	}
+	m := matches[0]
+	if m.Description != "Reads a boolean flag from the environment with a default" {
+		t.Fatalf("description = %q", m.Description)
+	}
+	if m.Metadata["file"] != "agent/config.go" {
+		t.Fatalf("metadata not parsed: %+v", m.Metadata)
+	}
+	if !strings.Contains(m.Content, "Returns the default") {
+		t.Fatalf("content = %q", m.Content)
+	}
+}
+
+func TestBrainAppendMergesMetadata(t *testing.T) {
+	store := newTestBrain(t)
+	_ = store.Remember("Config", "Parser", "body one", false, "first desc",
+		map[string]any{"file": "a.go", "tags": []any{"env"}})
+	// Append: content appended, description updated when provided, metadata merged.
+	_ = store.Remember("Config", "Parser", "body two", false, "second desc",
+		map[string]any{"method": "func Parse()"})
+
+	matches, _ := store.Recall("", "Config")
+	if len(matches) != 1 {
+		t.Fatalf("matches = %+v", matches)
+	}
+	m := matches[0]
+	if !strings.Contains(m.Content, "body one") || !strings.Contains(m.Content, "body two") {
+		t.Fatalf("content not appended: %q", m.Content)
+	}
+	if m.Description != "second desc" {
+		t.Fatalf("description not updated: %q", m.Description)
+	}
+	if m.Metadata["file"] != "a.go" || m.Metadata["method"] != "func Parse()" {
+		t.Fatalf("metadata not merged: %+v", m.Metadata)
+	}
+}
+
+func TestBrainReplaceOverwritesMetadata(t *testing.T) {
+	store := newTestBrain(t)
+	_ = store.Remember("Config", "Parser", "old body", false, "old desc",
+		map[string]any{"file": "a.go"})
+	_ = store.Remember("Config", "Parser", "new body", true, "new desc",
+		map[string]any{"method": "func Parse()"})
+
+	matches, _ := store.Recall("", "Config")
+	m := matches[0]
+	if m.Content != "new body" || m.Description != "new desc" {
+		t.Fatalf("replace did not overwrite: %+v", m)
+	}
+	if _, stale := m.Metadata["file"]; stale {
+		t.Fatalf("replace kept stale metadata: %+v", m.Metadata)
+	}
+	if m.Metadata["method"] != "func Parse()" {
+		t.Fatalf("replace lost new metadata: %+v", m.Metadata)
+	}
+}
+
+func TestBrainParsesLegacyFilesWithoutFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewBrainStore(dir, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hand-write an old-style topic file with no frontmatter.
+	legacy := "# Architecture\n\n## Layout\n\nDomain rules live under internal/domain.\n"
+	if err := os.WriteFile(filepath.Join(store.Dir(), "architecture.md"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := store.Recall("", "Architecture")
+	if len(matches) != 1 {
+		t.Fatalf("matches = %+v", matches)
+	}
+	m := matches[0]
+	if m.Description != "" || m.Metadata != nil {
+		t.Fatalf("legacy entry got non-empty hints: desc=%q meta=%+v", m.Description, m.Metadata)
+	}
+	if m.Content != "Domain rules live under internal/domain." {
+		t.Fatalf("legacy content mangled: %q", m.Content)
+	}
+}
+
+func TestBrainSearchByMetadata(t *testing.T) {
+	store := newTestBrain(t)
+	_ = store.Remember("Config", "Env bool parser", "plain body text", false,
+		"reads a flag", map[string]any{
+			"method": "func envBool(name string, def bool) bool",
+			"tags":   []any{"env", "config"},
+		})
+
+	// Query term appears only in the method signature.
+	matches, _ := store.Recall("envBool", "")
+	if len(matches) != 1 || matches[0].Subtopic != "Env bool parser" {
+		t.Fatalf("search by method signature = %+v", matches)
+	}
+	// Query term appears only in a tag.
+	matches, _ = store.Recall("config", "")
+	if len(matches) != 1 {
+		t.Fatalf("search by tag = %+v", matches)
+	}
+}
+
+func TestBrainIndexShowsHintsNotBody(t *testing.T) {
+	store := newTestBrain(t)
+	_ = store.Remember("Config", "Env bool parser", "secret-body-should-not-appear", false,
+		"reads a boolean flag", map[string]any{"file": "agent/config.go"})
+
+	index, err := store.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(index, "reads a boolean flag") {
+		t.Fatalf("index missing description: %q", index)
+	}
+	if !strings.Contains(index, "agent/config.go") {
+		t.Fatalf("index missing metadata: %q", index)
+	}
+	if strings.Contains(index, "secret-body-should-not-appear") {
+		t.Fatalf("index leaked body: %q", index)
 	}
 }
 

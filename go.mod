@@ -2,7 +2,10 @@ module github.com/devalexandre/deep-agent-ginga
 
 go 1.25.0
 
-require github.com/devalexandre/agno-golang v0.1.7
+require (
+	github.com/devalexandre/agno-golang v0.1.7
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -93,7 +96,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260311181403-84a4fc48630c // indirect
 	google.golang.org/grpc v1.79.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.67.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -10,9 +10,36 @@ metadata:
 
 The brain is a persistent, project-scoped knowledge base shared across agents and
 runs. It lives on disk (default `~/.agno/brain/<project>/`), one markdown file per
-topic, with subtopics as `##` sections. Only the index (titles) is surfaced into
-context; full content is fetched on demand. This keeps knowledge reusable without
-loading everything into every prompt.
+topic, with subtopics as `##` sections. Each entry carries a one-line
+**description** and free-form **metadata** (search hints), stored as YAML
+frontmatter. Only the lightweight layer — title + description + metadata — is
+surfaced into context; the full body is fetched on demand. This keeps knowledge
+findable and reusable without loading everything into every prompt.
+
+## Entry format
+
+Each entry is a `##` subtopic with optional YAML frontmatter:
+
+```markdown
+# Config
+
+## Env bool parser
+---
+description: Reads a boolean flag from the environment with a default
+metadata:
+  method: "func envBool(name string, def bool) bool"
+  tags: [env, config]
+  file: agent/config.go
+---
+Returns the default when the var is unset; treats 0/false/no/off/empty as false.
+```
+
+The `description` is the one line the agent reads in context to decide whether to
+recall the entry. The `metadata` holds search hints — method/function signatures,
+tags, file paths, short comments — that make the entry locatable: `Brain_Recall`
+matches against them too, not just the title and body. Entries without frontmatter
+are still valid (they parse with an empty description and no metadata), so older
+brain files keep working.
 
 Use this skill whenever the brain is enabled.
 
@@ -48,11 +75,18 @@ Do **not** save:
 - Speculative ideas you did not verify.
 - Anything already stored (check `Brain_ListTopics` first).
 
-Tool: `Brain_Remember(topic, subtopic, content, replace)`.
+Tool: `Brain_Remember(topic, subtopic, content, description, metadata, replace)`.
 
 - Choose a clear `topic` (e.g. "Architecture", "Build & Test", "Gotchas") and a
   specific `subtopic`.
-- Prefer refining an existing subtopic over creating near-duplicates.
+- **Always write a `description`** — one line summarizing the entry, so future
+  runs can judge relevance from the index without recalling the body.
+- **Fill `metadata`** with search hints that locate the exact point: method or
+  function signatures, tags, file paths, and short comments. These feed the
+  search index, so an entry can be found by symbol name or path, not just title.
+- Prefer refining an existing subtopic over creating near-duplicates. On append,
+  content is appended, a non-empty description replaces the old one, and metadata
+  keys are merged (new keys win); `replace=true` overwrites all three.
 - Use `replace=true` to correct outdated knowledge; append (default) to add to it.
 - Keep entries concise and factual, with exact paths, commands, and symbol names.
 

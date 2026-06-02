@@ -113,8 +113,9 @@ Any unset role builder uses a neutral software-engineering default, so the SDK i
 The **brain** is an optional, persistent knowledge base scoped per project and
 shared across agents and runs. The agent recalls relevant prior learnings before
 working and saves durable ones afterwards — so knowledge compounds over time
-**without inflating context**: only a lightweight index (topic/subtopic titles)
-is surfaced into prompts; full content is fetched on demand.
+**without inflating context**: only a lightweight index — each entry's title, a
+one-line **description**, and free-form **metadata** (search hints) — is surfaced
+into prompts; the full body is fetched on demand.
 
 ```go
 out, _ := deepagent.RunDeepAgent("Add a health endpoint", deepagent.DeepAgentConfig{
@@ -134,12 +135,40 @@ When `Brain` is enabled:
 - Every agent gets a `Brain` tool (`Brain_Recall`, `Brain_ListTopics`,
   `Brain_Remember`, `Brain_Forget`) and the `brain` skill that governs its use.
 
+### Entry format
+
+Each entry is a `## ` subtopic with optional YAML frontmatter carrying a
+`description` and `metadata`. Both are optional — entries without frontmatter
+parse as plain content, so older brain files keep working unchanged.
+
+```markdown
+# Config
+
+## Env bool parser
+---
+description: Reads a boolean flag from the environment with a default
+metadata:
+  method: "func envBool(name string, def bool) bool"
+  tags: [env, config]
+  file: agent/config.go
+---
+Returns the default when the var is unset; treats 0/false/no/off/empty as false.
+```
+
+The `description` is the one line the agent reads in context to judge relevance.
+The `metadata` holds search hints — method/function signatures, tags, file paths,
+short comments — that make the entry locatable: `Brain_Recall` matches against
+them too, not just the title and body. `Brain_Remember` accepts `description` and
+`metadata` alongside `topic`/`subtopic`/`content`; on append the description is
+updated and metadata keys are merged (new keys win), and `replace=true`
+overwrites all three.
+
 ### On-disk layout
 
 ```
 ~/.agno/brain/<project>/
   <topic-slug>.md   # one file per topic; subtopics are "## " sections
-  index.md          # auto-generated table of contents (titles only)
+  index.md          # auto-generated catalogue (titles + descriptions + metadata, no bodies)
 ```
 
 Knowledge is plain markdown, so it is easy to read, edit, and version by hand.
