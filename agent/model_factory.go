@@ -77,7 +77,14 @@ func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error
 	provider, modelID := parseModelSpec(config.ModelID)
 	constructor, ok := supportedModelProviders[provider]
 	if !ok {
-		return nil, "", fmt.Errorf("unsupported model provider %q; supported providers: %s", provider, strings.Join(SupportedModelProviders(), ", "))
+		// Unknown provider names are common for custom/self-hosted endpoints
+		// (e.g. an aggregator like "xkiro:some-model"). As long as a base URL
+		// is configured, treat them as a generic OpenAI-compatible endpoint
+		// instead of failing outright.
+		if strings.TrimSpace(config.ModelBaseURL) == "" {
+			return nil, "", fmt.Errorf("unsupported model provider %q; supported providers: %s (or set a model base URL to use any OpenAI-compatible endpoint)", provider, strings.Join(SupportedModelProviders(), ", "))
+		}
+		constructor = openailike.NewLikeOpenAIChat
 	}
 
 	options := []models.OptionClient{models.WithClientMaxTokens(4096)}
