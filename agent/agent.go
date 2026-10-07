@@ -287,15 +287,18 @@ func (c *CoderAgent) newRoleAgent(model models.AgnoModelInterface, tools []toolk
 
 func (c *CoderAgent) newRoleAgentWithSession(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int, db storage.DB, sessionID string, addHistory bool, numHistoryRuns int) (*agnoagent.Agent, error) {
 	a, err := agnoagent.NewAgent(agnoagent.AgentConfig{
-		Model:                model,
-		Name:                 name,
-		Description:          description,
-		Instructions:         instructions,
-		Tools:                tools,
-		CustomSkillsLoader:   skillsLoader,
-		SkillsToUse:          skillsToUse,
-		Markdown:             true,
-		ShowToolsCall:        true,
+		Model:              model,
+		Name:               name,
+		Description:        description,
+		Instructions:       instructions,
+		Tools:              tools,
+		CustomSkillsLoader: skillsLoader,
+		SkillsToUse:        skillsToUse,
+		Markdown:           true,
+		// Raw per-call JSON panels from agno-golang are redundant with the
+		// ToolBeforeHooks/ToolAfterHooks activity events below, which is how
+		// ACP clients (e.g. the VS Code extension) are meant to see tool calls.
+		ShowToolsCall:        false,
 		ToolCallLimit:        toolCallLimit,
 		DelayBetweenRetries:  1,
 		ExponentialBackoff:   true,

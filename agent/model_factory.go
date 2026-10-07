@@ -23,6 +23,11 @@ import (
 
 type modelProvider func(...models.OptionClient) (models.AgnoModelInterface, error)
 
+// defaultFreeLLMAPIBaseURL is the conventional local endpoint for FreeLLMAPI
+// (https://github.com/tashfeenahmed/freellmapi). Used when no --model-base-url
+// is provided.
+const defaultFreeLLMAPIBaseURL = "http://localhost:3001/v1"
+
 var supportedModelProviders = map[string]modelProvider{
 	"anthropic":         anthropic.New,
 	"aws":               bedrock.New,
@@ -31,6 +36,7 @@ var supportedModelProviders = map[string]modelProvider{
 	"bedrock":           bedrock.New,
 	"dashscope":         dashscope.NewDashScopeChat,
 	"deepseek":          deepseek.New,
+	"freellmapi":        newFreeLLMAPIChat,
 	"gemini":            gemini.NewGemini,
 	"google":            gemini.NewGemini,
 	"groq":              groq.New,
@@ -43,6 +49,28 @@ var supportedModelProviders = map[string]modelProvider{
 	"openrouter":        openrouter.NewOpenRouterChat,
 	"together":          together.NewTogetherChat,
 	"vllm":              vllm.NewVLLMProvider,
+}
+
+// newFreeLLMAPIChat wires up FreeLLMAPI (a local OpenAI-compatible router,
+// see https://github.com/tashfeenahmed/freellmapi), defaulting the base URL
+// and API key when the caller didn't supply one explicitly.
+func newFreeLLMAPIChat(options ...models.OptionClient) (models.AgnoModelInterface, error) {
+	opts := models.DefaultOptions()
+	for _, option := range options {
+		option(opts)
+	}
+
+	finalOptions := options
+	if opts.BaseURL == "" {
+		finalOptions = append([]models.OptionClient{models.WithBaseURL(defaultFreeLLMAPIBaseURL)}, finalOptions...)
+	}
+	if opts.APIKey == "" {
+		if apiKey := os.Getenv("FREELLMAPI_API_KEY"); apiKey != "" {
+			finalOptions = append(finalOptions, models.WithAPIKey(apiKey))
+		}
+	}
+
+	return openailike.NewLikeOpenAIChat(finalOptions...)
 }
 
 func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error) {
