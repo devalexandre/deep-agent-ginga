@@ -28,6 +28,11 @@ type modelProvider func(...models.OptionClient) (models.AgnoModelInterface, erro
 // is provided.
 const defaultFreeLLMAPIBaseURL = "http://localhost:3001/v1"
 
+// defaultLlamafileBaseURL is llamafile's default local server address
+// (https://github.com/mozilla-ai/llamafile), which exposes an
+// OpenAI-compatible API under /v1. Used when no --model-base-url is provided.
+const defaultLlamafileBaseURL = "http://127.0.0.1:8080/v1"
+
 var supportedModelProviders = map[string]modelProvider{
 	"anthropic":         anthropic.New,
 	"aws":               bedrock.New,
@@ -40,6 +45,7 @@ var supportedModelProviders = map[string]modelProvider{
 	"gemini":            gemini.NewGemini,
 	"google":            gemini.NewGemini,
 	"groq":              groq.New,
+	"llamafile":         newLlamafileChat,
 	"ollama":            ollama.NewOllamaChat,
 	"openai":            chat.NewOpenAIChat,
 	"openai-chat":       chat.NewOpenAIChat,
@@ -50,6 +56,16 @@ var supportedModelProviders = map[string]modelProvider{
 	"together":          together.NewTogetherChat,
 	"vllm":              vllm.NewVLLMProvider,
 }
+
+// noAPIKeyPlaceholder is sent as the API key when neither the caller nor a
+// provider-specific env var configured one. It exists to stop client.NewClient
+// (and the underlying openai-go SDK, which independently falls back to
+// OPENAI_API_KEY from the environment) from silently reusing an unrelated
+// key — e.g. a real OPENAI_API_KEY set for other tools — against a local or
+// third-party endpoint the user never pointed it at. Local-only servers like
+// llamafile don't check it; hosted free routers like FreeLLMAPI will reject
+// it with a clear auth error instead of an unexplained leak.
+const noAPIKeyPlaceholder = "not-required"
 
 // newFreeLLMAPIChat wires up FreeLLMAPI (a local OpenAI-compatible router,
 // see https://github.com/tashfeenahmed/freellmapi), defaulting the base URL
@@ -65,12 +81,54 @@ func newFreeLLMAPIChat(options ...models.OptionClient) (models.AgnoModelInterfac
 		finalOptions = append([]models.OptionClient{models.WithBaseURL(defaultFreeLLMAPIBaseURL)}, finalOptions...)
 	}
 	if opts.APIKey == "" {
-		if apiKey := os.Getenv("FREELLMAPI_API_KEY"); apiKey != "" {
-			finalOptions = append(finalOptions, models.WithAPIKey(apiKey))
+		apiKey := os.Getenv("FREELLMAPI_API_KEY")
+		if apiKey == "" {
+			apiKey = noAPIKeyPlaceholder
 		}
+		finalOptions = append(finalOptions, models.WithAPIKey(apiKey))
 	}
 
 	return openailike.NewLikeOpenAIChat(finalOptions...)
+}
+
+// newLlamafileChat wires up llamafile (a single-file local LLM server built
+// on llama.cpp, see https://github.com/mozilla-ai/llamafile). It serves one
+// model at a time and exposes an OpenAI-compatible API with no auth by
+// default, so this defaults the base URL and API key when the caller didn't
+// supply one explicitly.
+func newLlamafileChat(options ...models.OptionClient) (models.AgnoModelInterface, error) {
+	opts := models.DefaultOptions()
+	for _, option := range options {
+		option(opts)
+	}
+
+	finalOptions := options
+	if opts.BaseURL == "" {
+		finalOptions = append([]models.OptionClient{models.WithBaseURL(defaultLlamafileBaseURL)}, finalOptions...)
+	}
+	if opts.APIKey == "" {
+		apiKey := os.Getenv("LLAMAFILE_API_KEY")
+		if apiKey == "" {
+			apiKey = noAPIKeyPlaceholder
+		}
+		finalOptions = append(finalOptions, models.WithAPIKey(apiKey))
+	}
+	if opts.ID == "" {
+		finalOptions = append(finalOptions, models.WithID("llamafile"))
+	}
+
+	return openailike.NewLikeOpenAIChat(finalOptions...)
+}
+
+// providersWithOptionalModelID tolerate (and default sensibly for) a model
+// id that was never specified — llamafile only ever serves the one model it
+// was started with, so the id is a formality. newModel() normally skips
+// models.WithID() entirely when modelID is empty, which leaves the model's
+// ID at models.DefaultOptions()'s baked-in "gpt-4o" rather than truly empty,
+// so these providers need the empty id forwarded explicitly to tell them
+// apart from "the user asked for gpt-4o".
+var providersWithOptionalModelID = map[string]bool{
+	"llamafile": true,
 }
 
 func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error) {
@@ -88,7 +146,7 @@ func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error
 	}
 
 	options := []models.OptionClient{models.WithClientMaxTokens(4096)}
-	if modelID != "" {
+	if modelID != "" || providersWithOptionalModelID[provider] {
 		options = append(options, models.WithID(modelID))
 	}
 	if apiKey := firstNonEmpty(config.APIKey, os.Getenv("GINGA_API_KEY")); apiKey != "" {
