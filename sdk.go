@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/devalexandre/deep-agent-ginga/agent"
+	"github.com/devalexandre/deep-agent-ginga/guard"
 )
 
 // DeepAgentConfig configures Ginga when used as a Go SDK.
@@ -31,6 +32,14 @@ type DeepAgentConfig struct {
 	// BrainProject overrides the project name used to scope brain knowledge.
 	// Empty defaults to the workspace directory name.
 	BrainProject string
+
+	// ContextTokens is the context window requested from a local model server
+	// (Ollama's num_ctx). Zero uses agent.DefaultOllamaContext.
+	ContextTokens int
+	// ConfirmDataChange asks the user before a command that changes data in a
+	// database is executed. Nil means nobody can be asked, and such commands
+	// are always blocked. See the guard package.
+	ConfirmDataChange guard.Confirmer
 }
 
 // DeepAgent is a reusable SDK wrapper around the Ginga deep workflow.
@@ -83,6 +92,9 @@ func NewDeepAgent(config DeepAgentConfig) (*DeepAgent, error) {
 		Brain:            resolved.Brain,
 		BrainDir:         resolved.BrainDir,
 		BrainProject:     resolved.BrainProject,
+
+		ContextTokens:     resolved.ContextTokens,
+		ConfirmDataChange: resolved.ConfirmDataChange,
 	})
 	if err != nil {
 		return nil, err

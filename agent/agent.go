@@ -17,6 +17,7 @@ import (
 	"github.com/devalexandre/agno-golang/agno/tools"
 	"github.com/devalexandre/agno-golang/agno/tools/toolkit"
 	v2 "github.com/devalexandre/agno-golang/agno/workflow/v2"
+	"github.com/devalexandre/deep-agent-ginga/guard"
 )
 
 const defaultModelID = "gpt-4o"
@@ -70,6 +71,19 @@ type DeepAgentConfig struct {
 	ToolCallLimit    int
 	CompressResults  bool
 
+	// ContextTokens is the context window requested from a local model
+	// server (Ollama's num_ctx). Zero means DefaultOllamaContext.
+	ContextTokens int
+
+	// SkipModelCheck skips the startup question to a local model server
+	// (context size, tool support). Tests and offline construction set it.
+	SkipModelCheck bool
+
+	// ConfirmDataChange asks the user before a command that changes data in a
+	// database (INSERT, UPDATE, DELETE, migrations and the like) is executed.
+	// Nil means nobody can be asked, and such commands are always blocked.
+	ConfirmDataChange guard.Confirmer
+
 	// Brain enables the persistent, project-scoped knowledge base. When true the
 	// agent gains the Brain tool, the deep workflow recalls relevant knowledge as
 	// its first step and updates the brain as its last step, and the brain index
@@ -121,6 +135,7 @@ type DeepAgent struct {
 	modelID     string
 	knowledge   string
 	config      DeepAgentConfig
+	dataGate    *guard.Gate
 	brainStore  *BrainStore
 
 	// Chat session: agno manages recent conversation history for the chat
@@ -145,6 +160,12 @@ type DeepAgent struct {
 
 	activityMu sync.RWMutex
 	activity   func(AgentActivity)
+}
+
+// SetDataChangeConfirmer installs or removes (nil) the way to ask the user
+// before a command that changes data in a database. See guard.Gate.
+func (c *DeepAgent) SetDataChangeConfirmer(confirm guard.Confirmer) {
+	c.dataGate.SetConfirmer(confirm)
 }
 
 // NewDeepAgent keeps the original constructor for compatibility.
@@ -188,8 +209,9 @@ func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 		tools.NewFileToolWithWrite(),
 		tools.NewGitTool(),
 	}
+	dataGate := guard.NewGate(workspace, config.ConfirmDataChange)
 	if !config.DisableShell {
-		toolset = append(toolset, tools.NewShellTool())
+		toolset = append(toolset, dataGate.Wrap(tools.NewShellTool()))
 	}
 	skillsLoader, err := newSkillsLoader(config)
 	if err != nil {
@@ -228,6 +250,7 @@ func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 	}
 
 	deep := &DeepAgent{
+		dataGate:           dataGate,
 		workspace:          workspace,
 		modelID:            config.ModelID,
 		knowledge:          knowledge,
@@ -331,15 +354,18 @@ func (c *DeepAgent) newRoleAgent(model models.AgnoModelInterface, tools []toolki
 
 func (c *DeepAgent) newRoleAgentWithSession(model models.AgnoModelInterface, tools []toolkit.Tool, skillsLoader skill.SkillLoader, name, description, instructions string, skillsToUse []string, toolCallLimit int, db storage.DB, sessionID string, addHistory bool, numHistoryRuns int) (*agnoagent.Agent, error) {
 	a, err := agnoagent.NewAgent(agnoagent.AgentConfig{
-		Model:                model,
-		Name:                 name,
-		Description:          description,
-		Instructions:         instructions,
-		Tools:                tools,
-		CustomSkillsLoader:   skillsLoader,
-		SkillsToUse:          skillsToUse,
-		Markdown:             true,
-		ShowToolsCall:        true,
+		Model:              model,
+		Name:               name,
+		Description:        description,
+		Instructions:       instructions,
+		Tools:              tools,
+		CustomSkillsLoader: skillsLoader,
+		SkillsToUse:        skillsToUse,
+		Markdown:           true,
+		// Raw per-call JSON panels from agno-golang are redundant with the
+		// ToolBeforeHooks/ToolAfterHooks activity events below, which is how
+		// ACP clients (e.g. the VS Code extension) are meant to see tool calls.
+		ShowToolsCall:        false,
 		ToolCallLimit:        toolCallLimit,
 		DelayBetweenRetries:  1,
 		ExponentialBackoff:   true,

@@ -169,12 +169,13 @@ func TestBrainWiringInDeepAgent(t *testing.T) {
 	t.Setenv("GINGA_API_KEY", "")
 
 	deep, err := NewDeepAgentWithConfig(DeepAgentConfig{
-		ModelID:      "ollama:llama3.1:8b",
-		DisableShell: true,
-		Workspace:    t.TempDir(),
-		Brain:        true,
-		BrainDir:     t.TempDir(),
-		BrainProject: "wiring",
+		ModelID:        "ollama:llama3.1:8b",
+		SkipModelCheck: true,
+		DisableShell:   true,
+		Workspace:      t.TempDir(),
+		Brain:          true,
+		BrainDir:       t.TempDir(),
+		BrainProject:   "wiring",
 	})
 	if err != nil {
 		t.Fatalf("construct with brain: %v", err)
@@ -207,9 +208,10 @@ func TestBrainDisabledByDefault(t *testing.T) {
 	t.Setenv("GINGA_API_KEY", "")
 
 	deep, err := NewDeepAgentWithConfig(DeepAgentConfig{
-		ModelID:      "ollama:llama3.1:8b",
-		DisableShell: true,
-		Workspace:    t.TempDir(),
+		ModelID:        "ollama:llama3.1:8b",
+		SkipModelCheck: true,
+		DisableShell:   true,
+		Workspace:      t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("construct without brain: %v", err)
