@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -154,6 +155,29 @@ func newModel(config CoderAgentConfig) (models.AgnoModelInterface, string, error
 	}
 	if strings.TrimSpace(config.ModelBaseURL) != "" {
 		options = append(options, models.WithBaseURL(strings.TrimSpace(config.ModelBaseURL)))
+	}
+
+	if provider == "ollama" {
+		// Ollama loads a model with a 4,096-token window unless the request
+		// says otherwise, and silently cuts whatever does not fit. The agent's
+		// own instructions are larger than that.
+		params := map[string]interface{}{"num_ctx": config.ContextTokens}
+		if config.ContextTokens <= 0 {
+			params["num_ctx"] = DefaultOllamaContext
+		}
+		if !config.SkipModelCheck {
+			thinking, err := checkOllamaModel(context.Background(), config.ModelBaseURL, firstNonEmpty(config.APIKey, os.Getenv("GINGA_API_KEY")), modelID)
+			if err != nil {
+				return nil, "", err
+			}
+			if thinking {
+				// Small thinking models often stop after reasoning, with no
+				// answer and no tool call. The agent's phases already make
+				// the model plan, so the hidden reasoning is turned off.
+				params["think"] = false
+			}
+		}
+		options = append(options, models.WithClientParams(params))
 	}
 
 	model, err := constructor(options...)

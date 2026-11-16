@@ -73,3 +73,35 @@ Default skills (Go/Python/Node/Rust/Elixir programming, codebase analysis, plann
 
 - Go 1.25+
 - A model provider key (e.g. `OPENAI_API_KEY` / `GINGA_API_KEY`) depending on the configured model.
+
+## Database safety
+
+A command that changes data in a database is never executed without the
+user's explicit confirmation of that exact command. The check runs in code,
+before the tool executes; it does not depend on the model following its
+instructions.
+
+```go
+coder, err := agent.NewCoderAgentWithConfig(agent.CoderAgentConfig{
+    ModelID: "ollama:qwen3.5:4b",
+    ConfirmDataChange: func(req guard.Request) bool {
+        fmt.Printf("%s\n%s\nRun it? ", req.Reason, req.Command)
+        return askUser() // true only on an explicit yes
+    },
+})
+```
+
+With `ConfirmDataChange` unset nobody can be asked, and every flagged command
+is blocked. Flagged: SQL that writes (`INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`,
+`DROP`, `ALTER TABLE`, `MERGE`, `COPY ... FROM`), SQL files handed to a
+database client, migration and restore tools, and the write commands of
+`mongosh` and `redis-cli`. See the `guard` package for the details and its
+limit: it reads the command, not what a program does internally.
+
+## Local models (Ollama)
+
+For `ollama:` models the agent asks the server about the model at startup and
+fails with the fix when it does not exist or cannot call tools. Every request
+carries `num_ctx` (`ContextTokens`, default 8192), because Ollama otherwise
+loads models with 4,096 tokens and silently cuts the prompt. Reasoning is
+turned off for thinking models, which tend to stop without an answer.

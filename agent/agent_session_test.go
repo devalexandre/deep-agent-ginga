@@ -11,8 +11,9 @@ func TestChatSessionEnabledAndResettable(t *testing.T) {
 	t.Setenv("GINGA_API_KEY", "")
 
 	a, err := NewCoderAgentWithConfig(CoderAgentConfig{
-		ModelID:      "ollama:llama3.1:8b",
-		DisableShell: true,
+		ModelID:        "ollama:llama3.1:8b",
+		SkipModelCheck: true,
+		DisableShell:   true,
 	})
 	if err != nil {
 		t.Fatalf("NewCoderAgentWithConfig: %v", err)

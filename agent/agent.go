@@ -17,6 +17,7 @@ import (
 	"github.com/devalexandre/agno-golang/agno/tools"
 	"github.com/devalexandre/agno-golang/agno/tools/toolkit"
 	v2 "github.com/devalexandre/agno-golang/agno/workflow/v2"
+	"github.com/devalexandre/deep-agent-ginga/guard"
 )
 
 const defaultModelID = "gpt-4o"
@@ -70,6 +71,19 @@ type CoderAgentConfig struct {
 	ToolCallLimit    int
 	CompressResults  bool
 
+	// ContextTokens is the context window requested from a local model
+	// server (Ollama's num_ctx). Zero means DefaultOllamaContext.
+	ContextTokens int
+
+	// SkipModelCheck skips the startup question to a local model server
+	// (context size, tool support). Tests and offline construction set it.
+	SkipModelCheck bool
+
+	// ConfirmDataChange asks the user before a command that changes data in a
+	// database (INSERT, UPDATE, DELETE, migrations and the like) is executed.
+	// Nil means nobody can be asked, and such commands are always blocked.
+	ConfirmDataChange guard.Confirmer
+
 	// Name is the display name of the interactive chat agent. Empty defaults to
 	// "Deep Agent".
 	Name string
@@ -108,6 +122,7 @@ type CoderAgent struct {
 	modelID     string
 	knowledge   string
 	config      CoderAgentConfig
+	dataGate    *guard.Gate
 
 	// Chat session: agno manages recent conversation history for the chat
 	// agent. These fields retain the inputs needed to rebuild just the chat
@@ -131,6 +146,12 @@ type CoderAgent struct {
 
 	activityMu sync.RWMutex
 	activity   func(AgentActivity)
+}
+
+// SetDataChangeConfirmer installs or removes (nil) the way to ask the user
+// before a command that changes data in a database. See guard.Gate.
+func (c *CoderAgent) SetDataChangeConfirmer(confirm guard.Confirmer) {
+	c.dataGate.SetConfirmer(confirm)
 }
 
 // NewCoderAgent keeps the original constructor for compatibility.
@@ -174,8 +195,9 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 		tools.NewFileToolWithWrite(),
 		tools.NewGitTool(),
 	}
+	dataGate := guard.NewGate(workspace, config.ConfirmDataChange)
 	if !config.DisableShell {
-		toolset = append(toolset, tools.NewShellTool())
+		toolset = append(toolset, dataGate.Wrap(tools.NewShellTool()))
 	}
 	skillsLoader, err := newSkillsLoader(config)
 	if err != nil {
@@ -193,6 +215,7 @@ func NewCoderAgentWithConfig(config CoderAgentConfig) (*CoderAgent, error) {
 	}
 
 	coder := &CoderAgent{
+		dataGate:           dataGate,
 		workspace:          workspace,
 		modelID:            config.ModelID,
 		knowledge:          knowledge,
