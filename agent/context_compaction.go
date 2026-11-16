@@ -22,7 +22,7 @@ var phaseImportantPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:^|\s)(?:[\w.-]+/)+[\w.-]+\.(?:go|md|json|yaml|yml|txt|sh|py|js|ts|tsx|jsx|toml)(?:\s|$)`),
 }
 
-func (c *CoderAgent) compactPhaseContext(value string) string {
+func (c *DeepAgent) compactPhaseContext(value string) string {
 	value = strings.TrimSpace(value)
 	limit := maxPhaseContextChars
 	if c.config.CompressResults {

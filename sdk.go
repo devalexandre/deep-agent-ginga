@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/devalexandre/deep-agent-ginga/agent"
+	"github.com/devalexandre/deep-agent-ginga/guard"
 )
 
 // DeepAgentConfig configures Ginga when used as a Go SDK.
@@ -21,11 +22,29 @@ type DeepAgentConfig struct {
 	SkillsPath          string
 	SkillURLs           []string
 	Skills              []string
+
+	// Brain enables the persistent, project-scoped knowledge base. The agent
+	// recalls relevant knowledge before working and saves durable learnings
+	// afterwards, sharing them across runs without inflating context.
+	Brain bool
+	// BrainDir overrides the brain root directory. Empty defaults to ~/.agno/brain.
+	BrainDir string
+	// BrainProject overrides the project name used to scope brain knowledge.
+	// Empty defaults to the workspace directory name.
+	BrainProject string
+
+	// ContextTokens is the context window requested from a local model server
+	// (Ollama's num_ctx). Zero uses agent.DefaultOllamaContext.
+	ContextTokens int
+	// ConfirmDataChange asks the user before a command that changes data in a
+	// database is executed. Nil means nobody can be asked, and such commands
+	// are always blocked. See the guard package.
+	ConfirmDataChange guard.Confirmer
 }
 
 // DeepAgent is a reusable SDK wrapper around the Ginga deep workflow.
 type DeepAgent struct {
-	agent  *agent.CoderAgent
+	agent  *agent.DeepAgent
 	config DeepAgentConfig
 }
 
@@ -58,7 +77,7 @@ func NewDeepAgent(config DeepAgentConfig) (*DeepAgent, error) {
 		return nil, err
 	}
 
-	coderAgent, err := agent.NewCoderAgentWithConfig(agent.CoderAgentConfig{
+	deepAgent, err := agent.NewDeepAgentWithConfig(agent.DeepAgentConfig{
 		APIKey:           resolved.APIKey,
 		ModelID:          normalizeModel(resolved.Model),
 		ModelBaseURL:     resolved.ModelBaseURL,
@@ -70,12 +89,18 @@ func NewDeepAgent(config DeepAgentConfig) (*DeepAgent, error) {
 		DisableShell:     !resolved.EnableShell,
 		ToolCallLimit:    resolved.MaxIterations,
 		CompressResults:  resolved.CompressToolResults,
+		Brain:            resolved.Brain,
+		BrainDir:         resolved.BrainDir,
+		BrainProject:     resolved.BrainProject,
+
+		ContextTokens:     resolved.ContextTokens,
+		ConfirmDataChange: resolved.ConfirmDataChange,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return &DeepAgent{agent: coderAgent, config: resolved}, nil
+	return &DeepAgent{agent: deepAgent, config: resolved}, nil
 }
 
 // RunDeepAgent runs one deep coding task using context.Background.

@@ -39,7 +39,7 @@ type RuntimeStatus struct {
 	LastDeepPhases   []PhaseDuration
 }
 
-func (c *CoderAgent) Status() RuntimeStatus {
+func (c *DeepAgent) Status() RuntimeStatus {
 	c.statusMu.RLock()
 	defer c.statusMu.RUnlock()
 
@@ -48,7 +48,7 @@ func (c *CoderAgent) Status() RuntimeStatus {
 	return status
 }
 
-func (c *CoderAgent) updateStatus(update func(*RuntimeStatus)) {
+func (c *DeepAgent) updateStatus(update func(*RuntimeStatus)) {
 	c.statusMu.Lock()
 	defer c.statusMu.Unlock()
 	update(&c.status)

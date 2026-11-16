@@ -6,8 +6,8 @@ import (
 )
 
 func TestCompactPhaseContextKeepsImportantLinesAndTail(t *testing.T) {
-	agent := &CoderAgent{
-		config: CoderAgentConfig{CompressResults: true},
+	agent := &DeepAgent{
+		config: DeepAgentConfig{CompressResults: true},
 	}
 
 	var b strings.Builder
@@ -35,7 +35,7 @@ func TestCompactPhaseContextKeepsImportantLinesAndTail(t *testing.T) {
 }
 
 func TestCompactPhaseContextLeavesSmallContextUnchanged(t *testing.T) {
-	agent := &CoderAgent{}
+	agent := &DeepAgent{}
 	value := "small previous output"
 	if got := agent.compactPhaseContext(value); got != value {
 		t.Fatalf("expected small context unchanged, got %q", got)

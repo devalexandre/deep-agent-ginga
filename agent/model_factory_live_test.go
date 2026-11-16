@@ -194,7 +194,7 @@ func TestNewModelFallsBackToOpenAICompatibleForUnknownProvider(t *testing.T) {
 	clearProviderEnv(t)
 	server, captured := newCapturingServer(t)
 
-	model, label, err := newModel(CoderAgentConfig{
+	model, label, err := newModel(DeepAgentConfig{
 		ModelID:      "xkiro:some-model",
 		ModelBaseURL: server.URL,
 	})
@@ -212,7 +212,7 @@ func TestNewModelFallsBackToOpenAICompatibleForUnknownProvider(t *testing.T) {
 }
 
 func TestNewModelUnknownProviderWithoutBaseURLErrors(t *testing.T) {
-	_, _, err := newModel(CoderAgentConfig{ModelID: "xkiro:some-model"})
+	_, _, err := newModel(DeepAgentConfig{ModelID: "xkiro:some-model"})
 	if err == nil {
 		t.Fatal("expected an error for an unrecognized provider with no base URL configured")
 	}
@@ -222,7 +222,7 @@ func TestNewModelLlamafileWithoutModelIDDefaultsCorrectly(t *testing.T) {
 	clearProviderEnv(t)
 	server, captured := newCapturingServer(t)
 
-	model, label, err := newModel(CoderAgentConfig{
+	model, label, err := newModel(DeepAgentConfig{
 		ModelID:      "llamafile",
 		ModelBaseURL: server.URL,
 	})

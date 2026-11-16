@@ -17,7 +17,7 @@ const (
 	// instructions, the workspace knowledge and the tool schemas take about
 	// 6,000 tokens, so this is close to the minimum that works. It is kept
 	// low on purpose: a larger window can exhaust the memory of a small GPU.
-	// Raise it with CoderAgentConfig.ContextTokens when the hardware allows.
+	// Raise it with DeepAgentConfig.ContextTokens when the hardware allows.
 	DefaultOllamaContext = 8192
 )
 
