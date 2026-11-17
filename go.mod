@@ -3,7 +3,7 @@ module github.com/devalexandre/deep-agent-ginga
 go 1.26.0
 
 require (
-	github.com/devalexandre/agno-golang v0.2.1
+	github.com/devalexandre/agno-golang v0.2.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 

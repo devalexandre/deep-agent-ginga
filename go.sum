@@ -80,8 +80,8 @@ github.com/charmbracelet/x/term v0.2.1 h1:AQeHeLZ1OqSXhrAWpYUtZyX1T3zVxfpZuEQMIQ
 github.com/charmbracelet/x/term v0.2.1/go.mod h1:oQ4enTYFV7QN4m0i9mzHrViD7TQKvNEEkHUMCmsxdUg=
 github.com/clipperhouse/uax29/v2 v2.2.0 h1:ChwIKnQN3kcZteTXMgb1wztSgaU+ZemkgWdohwgs8tY=
 github.com/clipperhouse/uax29/v2 v2.2.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
-github.com/devalexandre/agno-golang v0.2.1 h1:LJiLBdJ3mOYiKxMIPMA7g1362NanSstSd4GYouutR+A=
-github.com/devalexandre/agno-golang v0.2.1/go.mod h1:CiU/Gsn8wqW/dDt4jFsUybNKa8fQQvKMjYl4cOnsLi0=
+github.com/devalexandre/agno-golang v0.2.2 h1:AzIzrJFrwtnAaRYShv12qNOhhJ4TEJPYwaHSi0Ud+ys=
+github.com/devalexandre/agno-golang v0.2.2/go.mod h1:CiU/Gsn8wqW/dDt4jFsUybNKa8fQQvKMjYl4cOnsLi0=
 github.com/dlclark/regexp2 v1.11.5 h1:Q/sSnsKerHeCkc/jSTNq1oCm7KiVgUMZRDUoRu0JQZQ=
 github.com/dlclark/regexp2 v1.11.5/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/dnaeon/go-vcr v1.2.0 h1:zHCHvJYTMh1N7xnV7zf1m1GPBF9Ad0Jk/whtQ1663qI=

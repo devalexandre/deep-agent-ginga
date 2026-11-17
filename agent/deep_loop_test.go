@@ -117,6 +117,14 @@ func TestDeepAgentStrategyRunsOneLoop(t *testing.T) {
 	if !strings.Contains(joined, "Plan_Update") || !strings.Contains(joined, "Code_EditFile") || strings.Contains(joined, "Push") {
 		t.Fatalf("tools offered: %s", joined)
 	}
+	// Claude 5 models reject sampling parameters the caller did not set.
+	for i, request := range script.requests {
+		for _, field := range []string{"temperature", "top_p", "top_k"} {
+			if _, ok := request[field]; ok {
+				t.Fatalf("request %d sent %s = %v", i+1, field, request[field])
+			}
+		}
+	}
 	if script.requests[0]["max_tokens"].(float64) != anthropicNonStreamingCap {
 		t.Fatalf("max_tokens = %v", script.requests[0]["max_tokens"])
 	}
