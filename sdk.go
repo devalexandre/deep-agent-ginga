@@ -36,6 +36,13 @@ type DeepAgentConfig struct {
 	// ContextTokens is the context window requested from a local model server
 	// (Ollama's num_ctx). Zero uses agent.DefaultOllamaContext.
 	ContextTokens int
+	// DeepStrategy is how a deep run works: "agent" (default) is one agent
+	// loop that plans, explores, edits, verifies and reports, like Claude
+	// Code and Codex; "phased" is the explore -> plan -> implement -> verify
+	// -> report pipeline with one agent per phase.
+	DeepStrategy string
+	// MaxOutputTokens caps one model answer. Zero picks it from the model.
+	MaxOutputTokens int
 	// ConfirmDataChange asks the user before a command that changes data in a
 	// database is executed. Nil means nobody can be asked, and such commands
 	// are always blocked. See the guard package.
@@ -94,6 +101,8 @@ func NewDeepAgent(config DeepAgentConfig) (*DeepAgent, error) {
 		BrainProject:     resolved.BrainProject,
 
 		ContextTokens:     resolved.ContextTokens,
+		DeepStrategy:      resolved.DeepStrategy,
+		MaxOutputTokens:   resolved.MaxOutputTokens,
 		ConfirmDataChange: resolved.ConfirmDataChange,
 	})
 	if err != nil {

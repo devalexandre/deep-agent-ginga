@@ -105,7 +105,7 @@ func Inspect(command, dir string) string {
 		return ""
 	}
 	if m := sqlWrite.FindString(command); m != "" {
-		return "SQL que altera dados: " + oneLine(m)
+		return "SQL that changes data: " + oneLine(m)
 	}
 	names := map[string]bool{}
 	for _, w := range words {
@@ -113,22 +113,22 @@ func Inspect(command, dir string) string {
 	}
 	for name := range names {
 		if alwaysWrite[name] {
-			return name + " altera o banco de dados"
+			return name + " changes the database"
 		}
 	}
 	for _, re := range migrations {
 		if m := re.FindString(command); m != "" {
-			return "migração de banco: " + oneLine(m)
+			return "database migration: " + oneLine(m)
 		}
 	}
 	if names["mongosh"] || names["mongo"] {
 		if m := mongoWrite.FindString(command); m != "" {
-			return "operação de escrita no MongoDB: " + oneLine(m)
+			return "MongoDB write: " + oneLine(m)
 		}
 	}
 	if names["redis-cli"] || names["valkey-cli"] {
 		if m := redisWrite.FindString(command); m != "" {
-			return "comando de escrita no Redis: " + oneLine(m)
+			return "Redis write: " + oneLine(m)
 		}
 	}
 	client := ""
@@ -174,20 +174,20 @@ func inspectScript(path, dir, client string) string {
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		return fmt.Sprintf("%s executa o arquivo %s, que não pôde ser lido para conferência", client, filepath.Base(path))
+		return fmt.Sprintf("%s runs the file %s, which could not be read to check it", client, filepath.Base(path))
 	}
 	if info.Size() > maxScriptBytes {
-		return fmt.Sprintf("%s executa o arquivo %s, grande demais para conferir", client, filepath.Base(path))
+		return fmt.Sprintf("%s runs the file %s, too large to check", client, filepath.Base(path))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("%s executa o arquivo %s, que não pôde ser lido para conferência", client, filepath.Base(path))
+		return fmt.Sprintf("%s runs the file %s, which could not be read to check it", client, filepath.Base(path))
 	}
 	if m := sqlWrite.Find(data); m != nil {
-		return fmt.Sprintf("o arquivo %s contém SQL que altera dados: %s", filepath.Base(path), oneLine(string(m)))
+		return fmt.Sprintf("the file %s has SQL that changes data: %s", filepath.Base(path), oneLine(string(m)))
 	}
 	if m := mongoWrite.Find(data); m != nil && strings.HasPrefix(client, "mongo") {
-		return fmt.Sprintf("o arquivo %s contém escrita no MongoDB: %s", filepath.Base(path), oneLine(string(m)))
+		return fmt.Sprintf("the file %s has a MongoDB write: %s", filepath.Base(path), oneLine(string(m)))
 	}
 	return ""
 }
@@ -242,13 +242,13 @@ type BlockedError struct {
 }
 
 func (e *BlockedError) Error() string {
-	how := "não há como pedir a confirmação do usuário neste modo de execução"
+	how := "the user cannot be asked for confirmation in this run mode"
 	if e.Denied {
-		how = "o usuário não confirmou"
+		how = "the user did not confirm it"
 	}
-	return fmt.Sprintf("BLOQUEADO: o comando não foi executado (%s; %s). "+
-		"Alterar dados em banco (INSERT, UPDATE, DELETE e similares) exige confirmação explícita do usuário. "+
-		"Não tente de novo por outro comando, script ou ferramenta: informe o usuário do comando exato e aguarde.",
+	return fmt.Sprintf("BLOCKED: the command was not run (%s; %s). "+
+		"Changing data in a database (INSERT, UPDATE, DELETE and the like) needs the user's explicit confirmation. "+
+		"Do not retry through another command, script or tool: tell the user the exact command and wait.",
 		e.Request.Reason, how)
 }
 

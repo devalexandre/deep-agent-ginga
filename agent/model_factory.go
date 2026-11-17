@@ -184,7 +184,7 @@ func newModel(config DeepAgentConfig) (models.AgnoModelInterface, string, error)
 		constructor = openailike.NewLikeOpenAIChat
 	}
 
-	options := []models.OptionClient{models.WithClientMaxTokens(4096)}
+	options := []models.OptionClient{models.WithClientMaxTokens(outputTokenLimit(provider, modelID, config.MaxOutputTokens))}
 	if modelID != "" || providersWithOptionalModelID[provider] {
 		options = append(options, models.WithID(modelID))
 	}

@@ -55,6 +55,8 @@ type Prompts struct {
 	Implementer InstructionBuilder
 	Verifier    InstructionBuilder
 	Reporter    InstructionBuilder
+	// Deep instructs the single agent of the "agent" deep strategy.
+	Deep InstructionBuilder
 }
 
 // DeepAgentConfig configures the deep agent runtime.
@@ -70,6 +72,18 @@ type DeepAgentConfig struct {
 	DisableShell     bool
 	ToolCallLimit    int
 	CompressResults  bool
+
+	// DeepStrategy selects how deep mode works. "agent" (the default) runs
+	// one agent loop that plans with the Plan tool, explores, edits, verifies
+	// and reports, the way Claude Code and Codex work. "phased" runs the
+	// fixed explore -> plan -> implement -> verify -> report pipeline, one
+	// agent per phase.
+	DeepStrategy string
+
+	// MaxOutputTokens caps the tokens of one model answer. Zero picks it
+	// from the model (see outputTokenLimit): a fixed small cap cuts a large
+	// file off mid-content, and models differ by an order of magnitude.
+	MaxOutputTokens int
 
 	// ContextTokens is the context window requested from a local model
 	// server (Ollama's num_ctx). Zero means DefaultOllamaContext.
@@ -131,12 +145,15 @@ type DeepAgent struct {
 	verifier    *agnoagent.Agent
 	reporter    *agnoagent.Agent
 	curator     *agnoagent.Agent
-	workspace   string
-	modelID     string
-	knowledge   string
-	config      DeepAgentConfig
-	dataGate    *guard.Gate
-	brainStore  *BrainStore
+	// lead runs deep mode with the "agent" strategy; plan is its plan.
+	lead       *agnoagent.Agent
+	plan       *PlanTool
+	workspace  string
+	modelID    string
+	knowledge  string
+	config     DeepAgentConfig
+	dataGate   *guard.Gate
+	brainStore *BrainStore
 
 	// Chat session: agno manages recent conversation history for the chat
 	// agent. These fields retain the inputs needed to rebuild just the chat
@@ -204,14 +221,16 @@ func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 		config.ToolCallLimit = 32
 	}
 
-	// One FileTool only: Anthropic rejects a request whose tool names repeat.
-	toolset := []toolkit.Tool{
-		tools.NewFileToolWithWrite(),
-		tools.NewGitTool(),
-	}
+	// A small toolset with clear names, as coding agents on the market use:
+	// file reading, editing and search, and one shell command runner. Git
+	// goes through the shell, so it is never offered as push/commit tools.
+	// Tool names must stay unique: Anthropic rejects repeated ones.
+	toolset := []toolkit.Tool{NewCodeTool(workspace)}
 	dataGate := guard.NewGate(workspace, config.ConfirmDataChange)
 	if !config.DisableShell {
-		toolset = append(toolset, dataGate.Wrap(tools.NewShellTool()))
+		shell := tools.NewShellTool()
+		shell.Toolkit.IncludeTools("Execute")
+		toolset = append(toolset, dataGate.Wrap(shell))
 	}
 	skillsLoader, err := newSkillsLoader(config)
 	if err != nil {
@@ -304,6 +323,15 @@ func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The plan tool belongs to the deep agent; the chat agent works without it.
+	deep.plan = NewPlanTool(deep.onPlanChange)
+	leadTools := append(append([]toolkit.Tool(nil), toolset...), deep.plan)
+	lead, err := deep.newRoleAgent(model, leadTools, skillsLoader, chatName, "Coding agent that takes a task from start to finish", pickBuilder(config.Prompts.Deep, deepAgentInstructions)(workspace, knowledge), skillsWith(implementerSkills, configuredSkills...), deepToolCallLimit(config.ToolCallLimit))
+	if err != nil {
+		return nil, err
+	}
+	deep.lead = lead
 
 	if brainStore != nil {
 		curator, curErr := deep.newRoleAgent(model, toolset, skillsLoader, "Brain Curator", "Persists durable, reusable knowledge to the project brain", brainCuratorInstructions(workspace, knowledge), skillsWith(reporterSkills, configuredSkills...), config.ToolCallLimit)
@@ -469,6 +497,14 @@ func activityFromToolDone(toolName string, args map[string]interface{}, result i
 func toolStartSummary(toolName string, args map[string]interface{}) string {
 	lower := strings.ToLower(toolName)
 	switch {
+	case strings.Contains(lower, "editfile"):
+		return fmt.Sprintf("Editing %s", displayTarget(stringArg(args, "path")))
+	case strings.Contains(lower, "grep"):
+		return fmt.Sprintf("Searching for %s", displayTarget(stringArg(args, "pattern")))
+	case strings.Contains(lower, "glob"):
+		return fmt.Sprintf("Finding files %s", displayTarget(stringArg(args, "pattern")))
+	case strings.Contains(lower, "plan_update"):
+		return "Updating the plan"
 	case strings.Contains(lower, "writefile"):
 		return fmt.Sprintf("Editing %s", displayTarget(stringArg(args, "path")))
 	case strings.Contains(lower, "readfile"):
@@ -477,10 +513,8 @@ func toolStartSummary(toolName string, args map[string]interface{}) string {
 		return fmt.Sprintf("Listing %s", displayTarget(stringArg(args, "path")))
 	case strings.Contains(lower, "searchfiles"):
 		return fmt.Sprintf("Searching files in %s", displayTarget(stringArg(args, "path")))
-	case strings.Contains(lower, "shelltool.execute"):
+	case strings.Contains(lower, "shelltool"):
 		return fmt.Sprintf("Running %s", displayTarget(commandArg(args)))
-	case strings.Contains(lower, "git"):
-		return fmt.Sprintf("Using git tool %s", toolName)
 	default:
 		return fmt.Sprintf("Using %s", toolName)
 	}
@@ -489,11 +523,11 @@ func toolStartSummary(toolName string, args map[string]interface{}) string {
 func toolDoneSummary(toolName string, args map[string]interface{}, result interface{}) string {
 	lower := strings.ToLower(toolName)
 	switch {
-	case strings.Contains(lower, "writefile"):
+	case strings.Contains(lower, "writefile"), strings.Contains(lower, "editfile"):
 		return fmt.Sprintf("Edited %s", displayTarget(stringArg(args, "path")))
 	case strings.Contains(lower, "readfile"):
 		return fmt.Sprintf("Read %s", displayTarget(stringArg(args, "path")))
-	case strings.Contains(lower, "shelltool.execute"):
+	case strings.Contains(lower, "shelltool"):
 		return fmt.Sprintf("Finished %s", displayTarget(commandArg(args)))
 	default:
 		return fmt.Sprintf("Finished %s", toolName)
@@ -614,6 +648,12 @@ func (c *DeepAgent) DeepWorkWithActivity(ctx context.Context, task string, progr
 	c.setActivity(activity)
 	defer c.setActivity(nil)
 
+	if deepStrategy(c.config.DeepStrategy) == DeepStrategyAgent {
+		answer, err := c.runDeepLoop(ctx, task, progress)
+		c.finalizeDeepStatus(time.Since(startedAt))
+		return answer, err
+	}
+
 	workflow := c.buildDeepWorkflow()
 	if progress != nil {
 		workflow.OnEvent(v2.StepStartedEvent, func(event *v2.WorkflowRunResponseEvent) {
@@ -654,6 +694,11 @@ func (c *DeepAgent) setActivity(activity func(AgentActivity)) {
 }
 
 func (c *DeepAgent) emitActivity(activity AgentActivity) {
+	// Tools take paths relative to the workspace; whoever follows the run
+	// (an editor opening the file, a change review) needs the real path.
+	if activity.Path != "" && !filepath.IsAbs(activity.Path) {
+		activity.Path = filepath.Join(c.workspace, activity.Path)
+	}
 	c.activityMu.RLock()
 	defer c.activityMu.RUnlock()
 	if c.activity != nil {
@@ -708,23 +753,25 @@ func (c *DeepAgent) buildDeepWorkflow() *v2.Workflow {
 func (c *DeepAgent) brainRecallStep() v2.ExecutorFunc {
 	return func(input *v2.StepInput) (*v2.StepOutput, error) {
 		startedAt := time.Now()
-		task := input.GetMessageAsString()
-		matches, err := c.brainStore.Recall(task, "")
-		var content string
-		if err != nil || len(matches) == 0 {
-			content = "PROJECT BRAIN\nNo prior knowledge matched this task. Use Brain_ListTopics / Brain_Recall to check, and record durable learnings at the end of the run."
-		} else {
-			var sb strings.Builder
-			sb.WriteString("PROJECT BRAIN — knowledge recalled for this task\n")
-			sb.WriteString("(Reuse this; verify against the live repo before relying on it.)\n")
-			for _, m := range matches {
-				sb.WriteString(fmt.Sprintf("\n## %s › %s\n%s\n", m.Topic, m.Subtopic, m.Content))
-			}
-			content = strings.TrimSpace(sb.String())
-		}
+		content := c.brainRecallText(input.GetMessageAsString())
 		c.recordDeepPhaseDuration("brain-recall", time.Since(startedAt))
 		return &v2.StepOutput{StepName: "brain-recall", Content: content}, nil
 	}
+}
+
+// brainRecallText is what the brain knows about task, without a model call.
+func (c *DeepAgent) brainRecallText(task string) string {
+	matches, err := c.brainStore.Recall(task, "")
+	if err != nil || len(matches) == 0 {
+		return "PROJECT BRAIN\nNo prior knowledge matched this task. Use Brain_ListTopics / Brain_Recall to check, and record durable learnings at the end of the run."
+	}
+	var sb strings.Builder
+	sb.WriteString("PROJECT BRAIN — knowledge recalled for this task\n")
+	sb.WriteString("(Reuse this; verify against the live repo before relying on it.)\n")
+	for _, m := range matches {
+		sb.WriteString(fmt.Sprintf("\n## %s › %s\n%s\n", m.Topic, m.Subtopic, m.Content))
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (c *DeepAgent) intakeStep() v2.ExecutorFunc {
@@ -748,7 +795,7 @@ SDK/CLI OPTIONS
 DEEP MODE CONTRACT
 - Work in phases: intake, explore, plan, implement, verify, final-report.
 - Treat each phase output as a state packet for the next phase.
-- If the task is a short follow-up (for example "save it", "pode salvar", "commit that", "apply"), resolve what it refers to using any RECENT TURNS / previous context provided above, and act on that prior deliverable. "Save"/"salvar" means write that prior content to a file with FileTool. Do not treat an ambiguous short word as a new concept to design; if the referenced content is missing, say so and ask instead of inventing a task.
+- If the task is a short follow-up (for example "save it", "commit that", "apply", in any language), resolve what it refers to using any RECENT TURNS / previous context provided above, and act on that prior deliverable. "Save" means write that prior content to a file with Code_WriteFile. Do not treat an ambiguous short word as a new concept to design; if the referenced content is missing, say so and ask instead of inventing a task.
 - Use codebase-analysis for repository discovery and deep-agent-planning for larger task discipline.
 - Before editing, read .ia markdown files first when present, then the most relevant markdown files.
 - For Go services, prefer the documented DDD architecture unless repository docs or existing code establish a different local pattern.
@@ -952,8 +999,8 @@ Operate like a careful coding CLI:
 - Keep changes scoped to the user request.
 - Explore the project structure before non-trivial changes.
 - Prefer understanding the repository through local documentation before reading source code.
-- Use FileTool to read and write files.
-- Use ShellTool for inspection, formatting, tests, builds, and safe developer commands.
+- Read files with Code_ReadFile, find code with Code_Grep and Code_Glob, change files with Code_EditFile (exact replacement) and create them with Code_WriteFile.
+- Use ShellTool_Execute for inspection, formatting, tests, builds, and safe developer commands.
 - Never revert user changes unless explicitly asked.
 - Never commit, push, delete branches, rewrite history, or run destructive commands unless explicitly asked.
 - When the user asks for a large, ambiguous, multi-step, or architectural task, recommend /deep or use deep mode if invoked.
@@ -968,8 +1015,8 @@ Default execution loop:
 
 Conversation continuity and follow-ups:
 - This is a multi-turn session. Treat short, terse, or imperative messages as follow-ups to the most recent exchange, not as new isolated tasks.
-- Resolve references like "save it", "salve isso", "pode salvar", "commit that", "rename it", "do it", "apply", or "go ahead" against the most recent deliverable or output in the conversation. Tolerate small typos (for example "pod salvar" means "pode salvar").
-- "Save"/"salvar" a document, proposal, plan, or analysis means: write that previously produced content to an appropriate file with FileTool. Infer a sensible path and filename from the content; ask only if the location is genuinely ambiguous.
+- Resolve references like "save it", "commit that", "rename it", "do it", "apply", or "go ahead", in any language and with small typos, against the most recent deliverable or output in the conversation.
+- "Save" a document, proposal, plan, or analysis means: write that previously produced content to an appropriate file with Code_WriteFile. Infer a sensible path and filename from the content; ask only if the location is genuinely ambiguous.
 - Never interpret an ambiguous short word as a new domain entity, feature, or concept to design. Do not invent requirements from it.
 - If you genuinely lack the referenced prior content, say so briefly and ask what to act on, instead of fabricating a task.
 
@@ -1004,7 +1051,7 @@ Tool discipline:
 - Prefer rg or repository-native search commands when searching text.
 - Before editing a file, read the relevant part of the file.
 - After editing, inspect the changed file or diff before reporting success.
-- Use ShellTool for safe local commands; avoid destructive commands unless the user explicitly requested them.
+- Use ShellTool_Execute for safe local commands; avoid destructive commands unless the user explicitly requested them.
 - Summarize long command output, but keep actionable paths, failing lines, and exact errors.
 
 Software engineering principles:
@@ -1130,7 +1177,7 @@ Workspace knowledge:
 %s
 
 Your job:
-- Apply the plan by editing files directly with FileTool.
+- Apply the plan by editing files with Code_EditFile (read the region first) and creating files with Code_WriteFile.
 - Keep changes scoped to the user request.
 - Follow .ia instructions, llm.md guidance, and existing project documentation.
 - Follow the detected language, framework, architecture, and local coding conventions.
@@ -1167,7 +1214,7 @@ Workspace knowledge:
 %s
 
 Your job:
-- Verify the implementation using ShellTool.
+- Verify the implementation using ShellTool_Execute.
 - Run targeted checks first, then broader checks when reasonable.
 - Use the detected language and project tooling.
 - Prefer fast, local checks related to changed files before full test suites.
@@ -1202,7 +1249,7 @@ Workspace knowledge:
 Your job is to write the final answer the user actually wants. Lead with the substance, not with a description of your process.
 
 CRITICAL RULES:
-- Reply in the SAME LANGUAGE the user used in the original task. If the task is written in Portuguese, answer in Portuguese.
+- These instructions are in English; reply in the language the user used in the original task, whatever it is.
 - Deliver the result, not a report that work happened. If the user asked you to write or produce something, surface its key content (main points, recommendations, sections) so the user gets the value without opening the file. Never answer with only "a document was created".
 - Adapt the structure to the task type below. Do not force sections that do not apply. Do not use phase names or workflow mechanics in the answer.
 - Use exact paths, symbols, commands, and error text. Never invent results or claim a check passed if it was not run.

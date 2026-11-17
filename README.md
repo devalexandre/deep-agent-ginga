@@ -2,7 +2,7 @@
 
 A reusable **deep-agent engine + Go SDK** for building staged, autonomous coding/engineering agents on top of [agno-golang](https://github.com/devalexandre/agno-golang).
 
-It provides the generic machinery — a multi-phase deep workflow (intake → explore → plan → implement → verify → final-report), an interactive chat agent with session history, model selection across providers, workspace knowledge indexing, context compaction, an optional persistent **brain** for cross-run knowledge, and built-in skills — while leaving the **persona and prompt customization to the consumer**.
+It provides the generic machinery — a deep mode that takes a coding task from start to finish (one agent loop by default, or a multi-phase pipeline), an interactive chat agent with session history, model selection across providers, workspace knowledge indexing, context compaction, an optional persistent **brain** for cross-run knowledge, and built-in skills — while leaving the **persona and prompt customization to the consumer**.
 
 > This is the open-source base extracted from the (private) Ginga coding CLI. Ginga-specific prompts and product behavior live in the consumer, not here.
 
@@ -46,8 +46,19 @@ res, _ := ag.Run(context.Background(), "explain the build pipeline")
 
 ## Deep workflow
 
-A deep run is a staged pipeline where each phase produces a compact state packet
-the next phase consumes:
+Deep mode has two strategies, chosen with `DeepStrategy`.
+
+**`agent` (default).** One agent loop, the way Claude Code and Codex work. The
+agent reads the repository instructions, finds code with `Code_Grep` and
+`Code_Glob`, writes a short plan with `Plan_Update` for multi-step tasks and
+keeps it current, edits with `Code_EditFile` (exact replacement), runs the
+relevant checks through the shell and reports. Every model call does useful
+work: there is no phase that starts over from a summary of the previous one.
+The plan is reported as an activity (`type: "plan"`, a checklist in
+`result`).
+
+**`phased`.** A staged pipeline where each phase produces a compact state
+packet the next phase consumes:
 
 | Phase | Role | Edits files? |
 |-------|------|--------------|
@@ -59,6 +70,34 @@ the next phase consumes:
 | `verify` | Run the most relevant checks and assess risk | rarely |
 | `final-report` | Deliver the user-facing answer | no |
 | `brain-update` | Persist durable, reusable learnings (only when `Brain` is enabled) | no |
+
+With `Brain` enabled, the `agent` strategy recalls knowledge before the loop
+and runs the brain curator after it.
+
+### Tools
+
+| Tool | What it does |
+|------|--------------|
+| `Code_ReadFile` | Numbered lines, read in windows (`offset`, `limit`) |
+| `Code_EditFile` | Replace exact text; fails when it is missing or not unique |
+| `Code_WriteFile` | Create a file or replace it whole |
+| `Code_Grep` | Regex search over contents (ripgrep when installed) |
+| `Code_Glob` | Find files by pattern (`**/*.go`) |
+| `Code_ListDirectory` | List one directory |
+| `ShellTool_Execute` | Run a command (builds, tests, git); database writes need confirmation |
+| `Plan_Update` | The task plan (deep `agent` strategy only) |
+| `Brain_*` | Project knowledge (only when `Brain` is enabled) |
+
+There are no git tools: git goes through the shell, so the model is never
+offered a push or commit tool.
+
+### Output tokens
+
+`max_tokens` follows the model: 128K for the Claude 5 family and 4.6+,
+GPT-5; 64K for Claude Haiku/Sonnet 4.5 and Gemini 2.5; 32K for GPT-4.1, and
+so on; 8,192 for a model the table does not know. Claude requests are capped
+at 16,000 while they are sent without streaming, because the Anthropic SDK
+refuses longer non-streaming calls. `MaxOutputTokens` overrides it.
 
 For short conversational tasks, use the interactive chat agent instead:
 
@@ -79,6 +118,8 @@ reply, _ := ag.Run(context.Background(), "what does the auth middleware do?")
 | `EnableShell` | `false` | Allow the shell tool for builds/tests/inspection |
 | `CompressToolResults` | `false` | Summarize long tool output to save context |
 | `MaxIterations` | `8` | Tool-call budget per agent |
+| `DeepStrategy` | `agent` | `agent` (one loop) or `phased` (pipeline) |
+| `MaxOutputTokens` | from the model | Most tokens in one model answer |
 | `Skills` / `SkillsPath` / `SkillURLs` | — | Add extra skills (names, local dir, or remote URLs) |
 | `Brain` | `false` | Enable the persistent knowledge base (see below) |
 | `BrainProject` | workspace dir name | Project scope for brain knowledge |
