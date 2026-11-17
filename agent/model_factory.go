@@ -34,6 +34,14 @@ const defaultFreeLLMAPIBaseURL = "http://localhost:3001/v1"
 // OpenAI-compatible API under /v1. Used when no --model-base-url is provided.
 const defaultLlamafileBaseURL = "http://127.0.0.1:8080/v1"
 
+// defaultRepoAIBaseURL is the REPO AI gateway (https://repostore.shop/claude),
+// which speaks the Anthropic Messages API. The SDK appends /v1/messages.
+const defaultRepoAIBaseURL = "https://api.repostore.shop"
+
+// defaultRepoAIModel is used when no model id is given; the Anthropic client's
+// own default is not served by the gateway.
+const defaultRepoAIModel = "claude-sonnet-5-5"
+
 var supportedModelProviders = map[string]modelProvider{
 	"anthropic":         anthropic.New,
 	"aws":               bedrock.New,
@@ -54,6 +62,7 @@ var supportedModelProviders = map[string]modelProvider{
 	"openai-like":       openailike.NewLikeOpenAIChat,
 	"openai-responses":  chat.NewOpenAIChat,
 	"openrouter":        openrouter.NewOpenRouterChat,
+	"repoai":            newRepoAIChat,
 	"together":          together.NewTogetherChat,
 	"vllm":              vllm.NewVLLMProvider,
 }
@@ -121,6 +130,34 @@ func newLlamafileChat(options ...models.OptionClient) (models.AgnoModelInterface
 	return openailike.NewLikeOpenAIChat(finalOptions...)
 }
 
+// newRepoAIChat wires up the REPO AI gateway, an Anthropic-compatible API.
+// The key comes from the caller (--api-key / GINGA_API_KEY) or REPOAI_API_KEY.
+// It never falls back to ANTHROPIC_API_KEY: that key belongs to Anthropic and
+// must not be sent to a third-party gateway.
+func newRepoAIChat(options ...models.OptionClient) (models.AgnoModelInterface, error) {
+	opts := models.DefaultOptions()
+	for _, option := range options {
+		option(opts)
+	}
+
+	finalOptions := options
+	if opts.BaseURL == "" {
+		finalOptions = append([]models.OptionClient{models.WithBaseURL(defaultRepoAIBaseURL)}, finalOptions...)
+	}
+	if opts.APIKey == "" {
+		apiKey := strings.TrimSpace(os.Getenv("REPOAI_API_KEY"))
+		if apiKey == "" {
+			return nil, fmt.Errorf("REPO AI needs an API key: set REPOAI_API_KEY or GINGA_API_KEY, or pass --api-key")
+		}
+		finalOptions = append(finalOptions, models.WithAPIKey(apiKey))
+	}
+	if opts.ID == "" {
+		finalOptions = append(finalOptions, models.WithID(defaultRepoAIModel))
+	}
+
+	return anthropic.New(finalOptions...)
+}
+
 // providersWithOptionalModelID tolerate (and default sensibly for) a model
 // id that was never specified — llamafile only ever serves the one model it
 // was started with, so the id is a formality. newModel() normally skips
@@ -130,6 +167,7 @@ func newLlamafileChat(options ...models.OptionClient) (models.AgnoModelInterface
 // apart from "the user asked for gpt-4o".
 var providersWithOptionalModelID = map[string]bool{
 	"llamafile": true,
+	"repoai":    true,
 }
 
 func newModel(config DeepAgentConfig) (models.AgnoModelInterface, string, error) {

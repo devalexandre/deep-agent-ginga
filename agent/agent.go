@@ -204,8 +204,8 @@ func NewDeepAgentWithConfig(config DeepAgentConfig) (*DeepAgent, error) {
 		config.ToolCallLimit = 32
 	}
 
+	// One FileTool only: Anthropic rejects a request whose tool names repeat.
 	toolset := []toolkit.Tool{
-		tools.NewFileTool(true),
 		tools.NewFileToolWithWrite(),
 		tools.NewGitTool(),
 	}
